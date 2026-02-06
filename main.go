@@ -1,6 +1,7 @@
 package main
 
-import( "net/http"; "sync/atomic"; "fmt"; "encoding/json")
+import( "net/http"; "sync/atomic"; "fmt"; "encoding/json";"log"; "strings")
+import _ "github.com/lib/pq"
 
 
 type apiConfig struct {
@@ -40,27 +41,26 @@ func (cfg *apiConfig) metricsReset(w http.ResponseWriter, r *http.Request) {
 
 
 func respondWithError(w http.ResponseWriter, code int, msg string){
-	w.WriteHeader(400)		
-	fmt.Fprintln(w, `{"error":"Something went wrong."}`)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)		
+	err_msg := fmt.Sprintf(`{"error":"%s"}`,msg)
+	fmt.Fprintln(w, err_msg)
 }
 
-
-
-func respondWithJSON(w http.ResponseWriter, code int, payload any) {
-	
-
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Println(payload)
+	dat, err := json.Marshal(payload)
+	if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+	}
+	fmt.Println(string(dat))
+	w.WriteHeader(code)
+	fmt.Fprintln(w, string(dat))
+	//w.Write(dat) 
 }
-
-
-
-
-
-
-
-
-
-
-
 
 
 func healthz(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +74,7 @@ func healthz(w http.ResponseWriter, r *http.Request) {
 
 func validate_chirp(w http.ResponseWriter, r *http.Request) {
 	type valid_chirp struct {
-		Body string `json:"body"`
+		Body string `json:"Body"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -101,16 +101,41 @@ func validate_chirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+    if true {
+	type resp struct{
+		//valid bool `json:valid`
+		Cleaned_body string `json:"cleaned_body"`
+	}
 
-	if true{
-		w.Header().Set("Content-Type", "application/json")
+	badwords := [3]string{"kerfuffle","sharbert","fornax"}
+	split_chirp := strings.Split(chirp_body," ")
+	for i,word := range split_chirp {
+		for _,badword := range badwords{
+			if strings.ToLower(word) == badword{
+				split_chirp[i] = "****"
+			}
+		}
+
+
+	}
+	cleaned := strings.Join(split_chirp," ")
+	fmt.Println(cleaned)
+
+	response := resp{Cleaned_body: cleaned}
+	//fmt.Println(response)
+	respondWithJSON(w, 200, response)
+	/*
+	w.Header().Set("Content-Type", "application/json")
 		
-		w.WriteHeader(200)
+	w.WriteHeader(200)
 
-		fmt.Fprintln(w, `{"valid":true}`)
-		return
-	} 
+		
+	fmt.Fprintln(w, `{"valid":true}`)
+	*/
+	return
 
+	
+	}
 	
 
 

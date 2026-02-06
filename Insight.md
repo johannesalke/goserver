@@ -46,3 +46,19 @@ func middlewareLog(next http.Handler) http.Handler {
 Then, any handler that needs logging can be wrapped by this middleware function:
 
 mux.Handle("/app/", middlewareLog(handler))
+
+
+
+
+
+
+
+
+
+
+
+# Config
+
+Database string: 
+"postgres://postgres:0@localhost:5432/chirpy"
+"postgres://postgres:0@localhost:5432/chirpy?sslmode=disable"
