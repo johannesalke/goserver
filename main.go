@@ -1,7 +1,7 @@
 package main
 
 import( "net/http"; "sync/atomic"; "fmt"; "encoding/json";"log"; "strings";"github.com/joho/godotenv";"os";"database/sql";"github.com/johannesalke/goserver/internal/database")
-import("github.com/google/uuid";"time")
+import("github.com/google/uuid";"time"; "github.com/alexedwards/argon2id")
 import _ "github.com/lib/pq"
 
 
@@ -9,6 +9,13 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	PLATFORM string
+}
+type Chirp struct {
+    ID        uuid.UUID `json:"id"`
+    CreatedAt time.Time `json:"created_at"`
+    UpdatedAt time.Time `json:"updated_at"`
+    Body     string    `json:"body"`
+	UserID uuid.UUID `json:"user_id"`
 }
 
 
@@ -209,13 +216,7 @@ func (cfg apiConfig) create_chirp(w http.ResponseWriter, r *http.Request) {
 		Body string `json:"body"`
 		UserID uuid.UUID `json:"user_id"`
 	}
-	type Chirp struct {
-    ID        uuid.UUID `json:"id"`
-    CreatedAt time.Time `json:"created_at"`
-    UpdatedAt time.Time `json:"updated_at"`
-    Body     string    `json:"body"`
-	UserID uuid.UUID `json:"user_id"`
-	}
+	
 	decoder := json.NewDecoder(r.Body)
 	
 	var chirp_req Chirp_Req
@@ -254,6 +255,59 @@ func (cfg apiConfig) create_chirp(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func (cfg apiConfig) get_chirps(w http.ResponseWriter, r *http.Request) {
+	DBchirps, err := cfg.db.GetChirps(r.Context())
+	if err != nil {
+		respondWithError(w,400,fmt.Sprintf("Error: %v",err))
+		return
+	}
+	
+	chirps := []Chirp{}
+	for _,dbChirp := range DBchirps{
+		
+		chirps = append(chirps, Chirp{
+			ID:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			UserID:    dbChirp.UserID,
+			Body:      dbChirp.Body,
+		})
+	}
+		
+	respondWithJSON(w, http.StatusOK, chirps)
+
+}
+
+func (cfg apiConfig) get_single_chirp(w http.ResponseWriter, r *http.Request) {
+
+	path_user_id :=	r.PathValue("chirpID")
+	fmt.Printf("PathValue: %v \n",path_user_id)
+	user_id,err := uuid.Parse(path_user_id)
+	if err != nil {
+		respondWithError(w,400,fmt.Sprintf("UUID Parsing error: %v",err))
+		return
+	}
+
+
+	dbChirp, err := cfg.db.GetSingleChirp(r.Context(),user_id)
+	if err != nil {
+		respondWithError(w,404,fmt.Sprintf("Error: %v",err))
+		return
+	}
+	
+	chirp := Chirp{
+			ID:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			UserID:    dbChirp.UserID,
+			Body:      dbChirp.Body,
+	}
+	
+		
+	respondWithJSON(w, http.StatusOK, chirp)
+
+}
+
 
 func main() {
 	godotenv.Load()
@@ -281,6 +335,8 @@ func main() {
 	mux.HandleFunc("POST /api/validate_chirp", validate_chirp)
 	mux.HandleFunc("POST /api/users",cfg.create_user)
 	mux.HandleFunc("POST /api/chirps",cfg.create_chirp)
+	mux.HandleFunc("GET /api/chirps",cfg.get_chirps)
+	mux.HandleFunc("GET /api/chirps/{chirpID}",cfg.get_single_chirp)
 
 	server.ListenAndServe()
 	
