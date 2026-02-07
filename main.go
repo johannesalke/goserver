@@ -1,8 +1,8 @@
 package main
 
 import( "net/http"; "sync/atomic"; "fmt"; "encoding/json";"log"; "strings";"github.com/joho/godotenv";"os";"database/sql";"github.com/johannesalke/goserver/internal/database")
-import("github.com/google/uuid";"time"; "github.com/alexedwards/argon2id")
-import _ "github.com/lib/pq"
+import("github.com/google/uuid";"time"; "github.com/johannesalke/goserver/internal/auth")
+import _ "github.com/lib/pq" //"github.com/alexedwards/argon2id";
 
 
 type apiConfig struct {
@@ -17,6 +17,13 @@ type Chirp struct {
     Body     string    `json:"body"`
 	UserID uuid.UUID `json:"user_id"`
 }
+type User struct {
+    ID        uuid.UUID `json:"id"`
+    CreatedAt time.Time `json:"created_at"`
+    UpdatedAt time.Time `json:"updated_at"`
+    Email     string    `json:"email"`
+	//HashedPassword string `json:"hashed_password"`
+	}
 
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -25,6 +32,7 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 		cfg.fileserverHits.Add(1)
 		next.ServeHTTP(w, r)
 	})
+	
 }
 
 func (cfg *apiConfig) metrics(w http.ResponseWriter, r *http.Request) {
@@ -169,19 +177,16 @@ func validate_chirp(w http.ResponseWriter, r *http.Request) {
 func (cfg apiConfig) create_user(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`
+		Password string `json:"password"`
 	}
-	type User struct {
-    ID        uuid.UUID `json:"id"`
-    CreatedAt time.Time `json:"created_at"`
-    UpdatedAt time.Time `json:"updated_at"`
-    Email     string    `json:"email"`
-	}
+	
 	decoder := json.NewDecoder(r.Body)
 	
 	var params parameters
 	err1 := decoder.Decode(&params)
 	//chirp_body := chirp.Body
-	fmt.Printf("Call: %v \n",params.Email)
+	fmt.Printf("Email: %v \n",params.Email)
+	fmt.Printf("Pwd: %v \n",params.Password)
 	
 	if err1 != nil {
 		w.Header().Set("Content-Type", "application/json")		
@@ -189,10 +194,20 @@ func (cfg apiConfig) create_user(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"error":"Something went wrong."}`)
 		return
 	}
+	hash,err2 := auth.HashPassword(params.Password)
+	if err2 != nil {
+		respondWithError(w,400,fmt.Sprintf("Error: %v",err2))
+		return
+	}
+
 
 	
+	UserParams := database.CreateUserParams{
+		Email: params.Email,
+		HashedPassword: hash,
+	}
 
-	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	user, err := cfg.db.CreateUser(r.Context(), UserParams)
 	fmt.Println(user)
 	if err != nil {
 
@@ -205,11 +220,55 @@ func (cfg apiConfig) create_user(w http.ResponseWriter, r *http.Request) {
         CreatedAt: user.CreatedAt,
         UpdatedAt: user.UpdatedAt,
         Email:     user.Email,
+		//HashedPassword: user.HashedPassword,
     } //Turn uppercase keys into lowercase ones, so that the test program properly recognizes them.
 
 	respondWithJSON(w, 201,out)
 
 }
+
+func (cfg apiConfig) user_login(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	
+	var req parameters
+	err0 := decoder.Decode(&req)
+	
+	fmt.Printf("Email: %v \n",req.Email)
+	if err0 != nil { respondWithError(w,400,fmt.Sprintf("Error: %v",err0)); return }
+
+
+
+	user,err1 := cfg.db.GetUserByEmail(r.Context(),req.Email)
+	if err1 != nil { respondWithError(w,401,"Incorrect email or password"); return }
+	
+	hash_match, err2 := auth.CheckPasswordHash(req.Password, user.HashedPassword)
+	if err2 != nil || hash_match != true { respondWithError(w,401,"Incorrect email or password"); return }
+
+	if hash_match == true { 
+		out := User{
+        ID:        user.ID,
+        CreatedAt: user.CreatedAt,
+        UpdatedAt: user.UpdatedAt,
+        Email:     user.Email,
+		//HashedPassword: user.HashedPassword,
+    	} //Turn uppercase keys into lowercase ones, so that the test program properly recognizes them.
+
+		respondWithJSON(w, 200,out)
+
+	}
+}
+
+
+
+
+
+
+
 
 func (cfg apiConfig) create_chirp(w http.ResponseWriter, r *http.Request) {
 	type Chirp_Req struct{
@@ -334,6 +393,7 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", healthz)
 	mux.HandleFunc("POST /api/validate_chirp", validate_chirp)
 	mux.HandleFunc("POST /api/users",cfg.create_user)
+	mux.HandleFunc("POST /api/login",cfg.user_login)
 	mux.HandleFunc("POST /api/chirps",cfg.create_chirp)
 	mux.HandleFunc("GET /api/chirps",cfg.get_chirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}",cfg.get_single_chirp)
