@@ -1,11 +1,14 @@
 package main
 
-import( "net/http"; "sync/atomic"; "fmt"; "encoding/json";"log"; "strings")
+import( "net/http"; "sync/atomic"; "fmt"; "encoding/json";"log"; "strings";"github.com/joho/godotenv";"os";"database/sql";"github.com/johannesalke/goserver/internal/database")
+import("github.com/google/uuid";"time")
 import _ "github.com/lib/pq"
 
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	db             *database.Queries
+	PLATFORM string
 }
 
 
@@ -34,9 +37,21 @@ func (cfg *apiConfig) metrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) metricsReset(w http.ResponseWriter, r *http.Request) {
+	user, err := cfg.db.DeleteUsers(r.Context())
+	if err != nil {
+		respondWithError(w,400,fmt.Sprintf("Error: %v",err))
+		return
+	}
+	if cfg.PLATFORM != "dev" {
+		respondWithError(w,403,fmt.Sprintf("Error: %v","That action is not permitted on this platform."))
+		return
+	}
 	cfg.fileserverHits.Store(0)
-	fmt.Fprintln(w, "Number of hits reset")
+	fmt.Fprintln(w, "Database and page hits reset.")
+	fmt.Println(user)
 	//return w,r
+
+	//
 }
 
 
@@ -144,10 +159,111 @@ func validate_chirp(w http.ResponseWriter, r *http.Request) {
 	
 }
 
+func (cfg apiConfig) create_user(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+	type User struct {
+    ID        uuid.UUID `json:"id"`
+    CreatedAt time.Time `json:"created_at"`
+    UpdatedAt time.Time `json:"updated_at"`
+    Email     string    `json:"email"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	
+	var params parameters
+	err1 := decoder.Decode(&params)
+	//chirp_body := chirp.Body
+	fmt.Printf("Call: %v \n",params.Email)
+	
+	if err1 != nil {
+		w.Header().Set("Content-Type", "application/json")		
+		w.WriteHeader(400)		
+		fmt.Fprintln(w, `{"error":"Something went wrong."}`)
+		return
+	}
+
+	
+
+	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	fmt.Println(user)
+	if err != nil {
+
+		respondWithError(w,400,fmt.Sprintf("Error: %v",err))
+		return
+	}
+
+	out := User{
+        ID:        user.ID,
+        CreatedAt: user.CreatedAt,
+        UpdatedAt: user.UpdatedAt,
+        Email:     user.Email,
+    } //Turn uppercase keys into lowercase ones, so that the test program properly recognizes them.
+
+	respondWithJSON(w, 201,out)
+
+}
+
+func (cfg apiConfig) create_chirp(w http.ResponseWriter, r *http.Request) {
+	type Chirp_Req struct{
+		Body string `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
+	}
+	type Chirp struct {
+    ID        uuid.UUID `json:"id"`
+    CreatedAt time.Time `json:"created_at"`
+    UpdatedAt time.Time `json:"updated_at"`
+    Body     string    `json:"body"`
+	UserID uuid.UUID `json:"user_id"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	
+	var chirp_req Chirp_Req
+	err1 := decoder.Decode(&chirp_req)
+	//chirp_body := chirp.Body
+	fmt.Printf("Call: %v \n",chirp_req.UserID)
+	
+	if err1 != nil {
+		respondWithError(w,400,`{"error":"Something went wrong."}`)				
+		return
+	}
+	
+	chirp_req2 := database.CreateChirpParams{
+		Body: chirp_req.Body,
+		UserID: chirp_req.UserID,
+	}
+
+	chirp, err := cfg.db.CreateChirp(r.Context(), chirp_req2)
+	fmt.Println(chirp)
+
+	if err != nil {
+
+		respondWithError(w,400,fmt.Sprintf("Error: %v",err))
+		return
+	}
+
+	out := Chirp{
+		ID:        chirp.ID,
+        CreatedAt: chirp.CreatedAt,
+        UpdatedAt: chirp.UpdatedAt,
+        Body: chirp.Body,
+		UserID: chirp.UserID,
+	} //Turn uppercase keys into lowercase ones, so that the test program properly recognizes them.*/
+
+	respondWithJSON(w, 201,out)
+
+}
+
 
 func main() {
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, _ := sql.Open("postgres", dbURL)
+	dbQueries := database.New(db)
+	PLATFORM := os.Getenv("PLATFORM")
+
 	mux := http.NewServeMux()
-	cfg := apiConfig{}
+	cfg := apiConfig{fileserverHits: atomic.Int32{}, db: dbQueries, PLATFORM: PLATFORM}
 
 	server := http.Server{Handler: mux, Addr: ":8080"}
 	fs := cfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))
@@ -163,6 +279,8 @@ func main() {
 	mux.HandleFunc("POST  /admin/reset", cfg.metricsReset)
 	mux.HandleFunc("GET /api/healthz", healthz)
 	mux.HandleFunc("POST /api/validate_chirp", validate_chirp)
+	mux.HandleFunc("POST /api/users",cfg.create_user)
+	mux.HandleFunc("POST /api/chirps",cfg.create_chirp)
 
 	server.ListenAndServe()
 	
