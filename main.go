@@ -1,7 +1,7 @@
 package main
 
 import( "net/http"; "sync/atomic"; "fmt"; "encoding/json";"log"; "strings";"github.com/joho/godotenv";"os";"database/sql";"github.com/johannesalke/goserver/internal/database")
-import("github.com/google/uuid";"time"; "github.com/johannesalke/goserver/internal/auth")
+import("github.com/google/uuid";"time"; "github.com/johannesalke/goserver/internal/auth"; "sort")
 import _ "github.com/lib/pq" //"github.com/alexedwards/argon2id";
 
 
@@ -508,7 +508,6 @@ func (cfg apiConfig) get_chirps(w http.ResponseWriter, r *http.Request) {
 		})
 		}
 		
-		respondWithJSON(w, http.StatusOK, chirps)
 
 
 	} else {
@@ -525,12 +524,14 @@ func (cfg apiConfig) get_chirps(w http.ResponseWriter, r *http.Request) {
 			Body:      dbChirp.Body,
 		})
 		}
-		
-		respondWithJSON(w, http.StatusOK, chirps)
+				
+	}
+	sort_q := r.URL.Query().Get("sort")
+	if sort_q == "desc" {
+		 sort.Slice(chirps, func(i, j int) bool { return chirps[j].CreatedAt.Before(chirps[i].CreatedAt) })
 	}
 	
-	
-	
+	respondWithJSON(w, http.StatusOK, chirps)
 
 }
 
